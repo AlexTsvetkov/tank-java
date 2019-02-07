@@ -44,6 +44,7 @@ import org.slf4j.MarkerFactory;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.InputStream;
+import java.util.List;
 import java.util.Properties;
 
 /*
@@ -137,7 +138,9 @@ public class Main {
 		// 1 Create Register Factory: we choose the SQLiteRegisterFactory implementation.
 		//
 		RegisterFactory registerFactory = new SQLiteRegisterFactory(appSettings.getDBUrl());
-		
+
+		List<ProviderChannel> allChannels = registerFactory.getProviderRegister().getAllChannels();
+
 		//
 		// 2 start to construct an UniquidNode...
 		//
@@ -241,6 +244,9 @@ public class Main {
 
 					// If the node is ready to be imprinted...
 					if (UniquidNodeState.IMPRINTING.equals(arg0)) {
+
+						//TODO [ATS]
+						//sends username and public key to oomnitza
 
 						// Create a MQTTClient pointing to the broker on the UID/announce topic and specify
 						// 0 timeout: we don't want a response.
