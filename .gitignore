@@ -11,3 +11,7 @@ bin
 *.backup
 *.log
 .idea
+.gradle/
+build/
+out/
+
