@@ -11,41 +11,17 @@ import com.uniquid.core.provider.exception.FunctionException;
 import com.uniquid.core.provider.impl.GenericFunction;
 import com.uniquid.messages.FunctionRequestMessage;
 import com.uniquid.messages.FunctionResponseMessage;
-import com.uniquid.node.impl.UniquidNodeImpl;
-import com.uniquid.register.RegisterFactory;
-import com.uniquid.register.impl.sql.SQLiteRegisterFactory;
-import com.uniquid.register.provider.ProviderChannel;
 import com.uniquid.tank.entity.Tank;
 
 import java.io.IOException;
 
 public class TankFunction extends GenericFunction {
 
-	// constructor accepts registerFactory and uniquidNode
-
-	/*RegisterFactory registerFactory = new SQLiteRegisterFactory(appSettings.getDBUrl());
-	registerFactory.get*/
-
 	@Override
 	public void service(FunctionRequestMessage inputMessage, FunctionResponseMessage outputMessage, byte[] payload)
 			throws FunctionException, IOException {
 
-		/*RegisterFactory registerFactory = new SQLiteRegisterFactory(appSettings.getDBUrl());
-		String userAddress = inputMessage.getUser();
-		ProviderChannel providerChannel = registerFactory.getProviderRegister().getChannelByUserAddress(userAddress);
-		final UniquidNodeImpl uniquidNode = new UniquidNodeImpl();
-		// root pub key (xpub)
-		String publicKey = uniquidNode.getPublicKey();
-		ChannelKey key = uniquidNode.getChannelKey(providerChannel);*/
-
-		// "; Private key: " + key.getPrivateKey() +
-		// derived pub key
-		// 		"; Public key: " + key.getPublicKey());
-
-
 		Tank tank = Tank.getInstance();
-
-
 
 		String params = inputMessage.getParameters();
 		String result = "";
