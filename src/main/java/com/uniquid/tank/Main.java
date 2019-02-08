@@ -280,6 +280,10 @@ public class Main {
 
 			@Override
 			public void onUserContractCreated(UserChannel userChannel) {
+				//TODO [USER TANK]
+				// provider function accept user xpub and tpub and save it in ProviderChannel entity
+				// provider function returns provider xpub and tpub
+				// xpub (provider root pub key) and tpub (provider derived pub key) are saved in UserChannel
 				LOGGER.info(MARKER, "Created User Contract: " + userChannel);
 			}
 
