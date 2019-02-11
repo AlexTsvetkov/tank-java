@@ -7,23 +7,30 @@
 
 package com.uniquid.tank;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.uniquid.core.Listener;
 import com.uniquid.core.impl.DefaultRequestHandler;
 import com.uniquid.core.impl.UniquidSimplifier;
 import com.uniquid.messages.AnnounceMessage;
+import com.uniquid.messages.FunctionRequestMessage;
+import com.uniquid.messages.FunctionResponseMessage;
 import com.uniquid.node.UniquidNodeState;
 import com.uniquid.node.impl.ChannelKey;
 import com.uniquid.node.impl.UniquidNodeImpl;
 import com.uniquid.node.listeners.EmptyUniquidNodeEventListener;
 import com.uniquid.params.UniquidRegTest;
 import com.uniquid.register.RegisterFactory;
+import com.uniquid.register.exception.RegisterException;
 import com.uniquid.register.impl.sql.SQLiteRegisterFactory;
 import com.uniquid.register.provider.ProviderChannel;
 import com.uniquid.register.user.UserChannel;
 import com.uniquid.tank.entity.Tank;
 import com.uniquid.tank.function.InputFaucetFunction;
 import com.uniquid.tank.function.OutputFaucetFunction;
+import com.uniquid.tank.function.PubKeyExchangeFunction;
 import com.uniquid.tank.function.TankFunction;
+import com.uniquid.tank.function.model.PubKeysDto;
+import com.uniquid.userclient.UserClientException;
 import com.uniquid.userclient.impl.MQTTUserClient;
 import com.uniquid.utils.BackupData;
 import com.uniquid.utils.SeedUtils;
@@ -44,6 +51,7 @@ import org.slf4j.MarkerFactory;
 
 import java.io.File;
 import java.io.FileInputStream;
+import java.io.IOException;
 import java.io.InputStream;
 import java.util.List;
 import java.util.Properties;
@@ -55,19 +63,20 @@ public class Main {
 
 	private static final Logger LOGGER = LoggerFactory.getLogger(Main.class.getName());
 	private static final String CONSOLE = "CONSOLE";
-	
+
 	private static final Marker MARKER = MarkerFactory.getMarker(CONSOLE);
-	
+
 	private static final String APPCONFIG_PROPERTIES = "/appconfig.properties";
-	
+
 	private static final String DEBUG = "DEBUG";
-	
+	private static final int TIMEOUT_IN_SECONDS = 30;
+
 	public static void main(String[] args) throws Exception {
-		
+
 		org.gmagnotta.log.LogEventCollector.getInstance().setLogLevelThreshold(LogLevel.INFO);
-		
+
 		String debug = System.getProperty(DEBUG);
-		
+
 		if (debug != null) {
 			org.gmagnotta.log.LogEventCollector.getInstance().setLogLevelThreshold(LogLevel.TRACE);
 		}
@@ -75,33 +84,33 @@ public class Main {
 		LOGGER.info(MARKER, "Starting tank...");
 
 		FileSystemLogStore fileSystemLogStore = new FileSystemLogStore(1 * 1024 * 1024, 3, new File("."));
-		
+
 		FileSystemLogEventWriter fs = new FileSystemLogEventWriter(fileSystemLogStore);
-		
+
 		org.gmagnotta.log.LogEventCollector.getInstance().addLogEventWriter(fs);
-		
+
 		MarkerAwareConsoleLogEventWriter markerAwareConsoleLogEventWriter = new MarkerAwareConsoleLogEventWriter(CONSOLE);
-		
+
 		org.gmagnotta.log.LogEventCollector.getInstance().addLogEventWriter(markerAwareConsoleLogEventWriter);
-		
+
 		// Read configuration properties
 		InputStream inputStream;
-		
+
 		if (args.length != 0) {
-			
+
 			// the first parameter is the properties file that contains application's configuration
 			inputStream = new FileInputStream(new File(args[0]));
-			
+
 		} else {
-			
+
 			// if the user did not pass properties file, then we use our default one (inside the jar)
 			inputStream = Main.class.getResourceAsStream(APPCONFIG_PROPERTIES);
-			
+
 		}
-		
+
 		Properties properties = new Properties();
 		properties.load(inputStream);
-		
+
 		// close input stream
 		inputStream.close();
 
@@ -116,25 +125,25 @@ public class Main {
 
 		// Read wallet file
 		File userWalletFile = appSettings.getUserWalletFile();
-		
+
 		// Read chain file
 		File chainFile = appSettings.getChainFile();
-		
+
 		// Read chain file
 		File userChainFile = appSettings.getUserChainFile();
-		
+
 		// Machine name
 		String machineName = "JTank" + StringUtils.getRandomName(12);
-		
+
 		// Seed backup file
 		File seedFile = appSettings.getSeedFile();
-		
+
 		// Retrieve list of blockchain peers
 		String bcpeers = appSettings.getBlockChainPeers();
-		
+
 		// Tell library to use those peers
 		UniquidRegTest.get().overridePeers(bcpeers);
-		
+
 		//
 		// 1 Create Register Factory: we choose the SQLiteRegisterFactory implementation.
 		//
@@ -146,17 +155,17 @@ public class Main {
 		// 2 start to construct an UniquidNode...
 		//
 		final UniquidNodeImpl uniquidNode;
-		
+
 		// ... if the seed file exists then we use the SeedUtils to open it and decrypt its content: we can extract the
 		// mnemonic string, creationtime and name to restore the node; otherwise we create a new node initialized with a
 		// random seed and then we use a SeedUtils to perform an encrypted backup of the seed and other properties
 		if (seedFile.exists() && !seedFile.isDirectory()) {
-			
+
 			// create a SeedUtils (the wrapper that is able to load/read/decrypt the seed file)
 			SeedUtils<BackupData> seedUtils = new SeedUtils<>(seedFile);
-			
+
 			// decrypt the content with the password read from the application setting properties
-			BackupData readData = new BackupData(); 
+			BackupData readData = new BackupData();
 
 			seedUtils.readData(appSettings.getSeedPassword(), readData);
 
@@ -165,14 +174,14 @@ public class Main {
 
 			// fetch creation time
 			final long creationTime = readData.getCreationTime();
-			
+
 			machineName = readData.getName();
-			
+
 			// now we build an UniquidNode with the data read from seed file: we choose the UniquidNodeImpl
 			// implementation
 			@SuppressWarnings("rawtypes")
 			UniquidNodeImpl.UniquidNodeBuilder builder = new UniquidNodeImpl.UniquidNodeBuilder();
-			
+
 			builder.setNetworkParameters(networkParameters).
 					setProviderFile(providerWalletFile).
 					setUserFile(userWalletFile).
@@ -181,15 +190,15 @@ public class Main {
 					setRegisterFactory(registerFactory).
 					setRegistryUrl(appSettings.getRegistryUrl()).
 					setNodeName(machineName);
-			
+
 			uniquidNode = builder.buildFromMnemonic(mnemonic, creationTime);
-			
+
 		} else {
-		
+
 			// We create a builder with specified settings
 			@SuppressWarnings("rawtypes")
 			UniquidNodeImpl.UniquidNodeBuilder builder = new UniquidNodeImpl.UniquidNodeBuilder();
-					builder.setNetworkParameters(networkParameters)
+			builder.setNetworkParameters(networkParameters)
 					.setProviderFile(providerWalletFile)
 					.setUserFile(userWalletFile)
 					.setProviderChainFile(chainFile)
@@ -197,50 +206,50 @@ public class Main {
 					.setRegisterFactory(registerFactory)
 					.setRegistryUrl(appSettings.getRegistryUrl())
 					.setNodeName(machineName);
-			
+
 			// ask the builder to create a node with a random seed
 			uniquidNode = builder.build();
-			
+
 			// Now we fetch from the builder the DeterministicSeed that allow us to export mnemonics and creationtime
 			DeterministicSeed seed = uniquidNode.getDeterministicSeed();
-			
+
 			// we save the creation time
 			long creationTime = seed.getCreationTimeSeconds();
-			
+
 			// we save mnemonics
 			String mnemonics = Utils.SPACE_JOINER.join(seed.getMnemonicCode());
-			
+
 			// we prepare the data to save for seedUtils
 			BackupData backupData = new BackupData();
 			backupData.setMnemonic(mnemonics);
 			backupData.setCreationTime(creationTime);
 			backupData.setName(machineName);
-			
+
 			// we construct a seedutils
 			SeedUtils<BackupData> seedUtils = new SeedUtils<>(seedFile);
-			
+
 			// now backup mnemonics encrypted on disk
 			seedUtils.saveData(backupData, appSettings.getSeedPassword());
-		
+
 		}
-		
+
 		final String senderTopic = machineName;
 
 		//
 		// 2 ...we finished to build an UniquidNode
-		// 
-		
+		//
+
 		// Here we register a callback on the uniquidNode that allow us to be triggered when some interesting events happens
 		// Currently we are only interested in receiving the onNodeStateChange() event. The other methods are present
 		// because we decided to use an anonymous inner class.
 		uniquidNode.addUniquidNodeEventListener(new EmptyUniquidNodeEventListener() {
-			
+
 			@Override
 			public void onNodeStateChange(UniquidNodeState arg0) {
 
 				// Register an handler that allow to send an imprinting message to the imprinter
 				try {
-					
+
 					LOGGER.info(MARKER, "Tank new state: " + arg0);
 
 					// If the node is ready to be imprinted...
@@ -252,23 +261,23 @@ public class Main {
 						// Create a MQTTClient pointing to the broker on the UID/announce topic and specify
 						// 0 timeout: we don't want a response.
 						final MQTTUserClient userClient = new MQTTUserClient(appSettings.getMQTTBroker(), appSettings.getAnnounceTopic(), 0, senderTopic);
-						
+
 						AnnounceMessage announceMessage = new AnnounceMessage();
 						announceMessage.setName(uniquidNode.getNodeName());
 						announceMessage.setPubKey(uniquidNode.getPublicKey());
-						
+
 						LOGGER.info(MARKER, "Announcing tank on MQTT to imprinter");
-						
+
 						// send the request.  The server will not reply (but will do an imprint on blockchain)
 						userClient.send(announceMessage);
-						
+
 					}
 
 				} catch (Exception ex) {
 					// expected! the server will not reply
 				}
 			}
-			
+
 			@Override
 			public void onProviderContractCreated(ProviderChannel providerChannel) {
 				LOGGER.info(MARKER, "Created Provider Contract: " + providerChannel);
@@ -281,11 +290,8 @@ public class Main {
 
 			@Override
 			public void onUserContractCreated(UserChannel userChannel) {
-				//TODO [USER TANK]
-				// provider function accept user xpub and tpub and save it in ProviderChannel entity
-				// provider function returns provider xpub and tpub
-				// xpub (provider root pub key) and tpub (provider derived pub key) are saved in UserChannel
 				LOGGER.info(MARKER, "Created User Contract: " + userChannel);
+				updateXpubAndTpubKeysForUserAndProvider(userChannel, uniquidNode, appSettings, registerFactory);
 			}
 
 			@Override
@@ -295,35 +301,38 @@ public class Main {
 
 		});
 
-		// 
+		//
 		// 3 Create UniquidSimplifier that wraps registerFactory, connector and uniquidnode
 		final UniquidSimplifier simplifier = new UniquidSimplifier(registerFactory, uniquidNode);
-		
+
+		simplifier.addFunction(new PubKeyExchangeFunction(registerFactory, uniquidNode), 32);
 		// 4 Register custom functions on slot 34, 35, 36
 		simplifier.addFunction(new TankFunction(), 34);
 		simplifier.addFunction(new InputFaucetFunction(), 35);
 		simplifier.addFunction(new OutputFaucetFunction(), 36);
-		
+
 		LOGGER.info(MARKER, "Starting Uniquid library with node: {}", machineName);
-		
+
 		// Set static values for Tank singleton
 		Tank.mqttbroker = appSettings.getMQTTBroker();
 		Tank.tankname = machineName;
-		
+
 		//
 		// 5 start Uniquid core library: this will init the node, sync on blockchain, and use the provided
 		// registerFactory to interact with the persistence layer
 		simplifier.syncBlockchain();
 
 		//
-        // 6 start listening messages from MQTT broker
-        //
-        String broker = appSettings.getMQTTBroker();
-        String topic = machineName;
+		// 6 start listening messages from MQTT broker
+		//
+		String broker = appSettings.getMQTTBroker();
+		String topic = machineName;
 
-        Listener listener = new Listener(broker, topic, new DefaultRequestHandler());
+		Listener listener = new Listener(broker, topic, new DefaultRequestHandler());
 		simplifier.addListener(listener);
 
+		registerFactory.getUserRegister().getAllUserChannels()
+				.forEach(userChannel -> updateXpubAndTpubKeysForUserAndProvider(userChannel, uniquidNode, appSettings, registerFactory));
 
 		//
 		// Get contract's keys
@@ -353,30 +362,64 @@ public class Main {
 		// Register shutdown hook
 		Runtime.getRuntime().addShutdownHook(new Thread(() -> {
 
-            LOGGER.info(MARKER, "Terminating tank");
-            try {
+			LOGGER.info(MARKER, "Terminating tank");
+			try {
 
-                // tell the library to shutdown and close all opened resources
-                simplifier.shutdown();
+				// tell the library to shutdown and close all opened resources
+				simplifier.shutdown();
 
-                // explicitly stop logging
-                for (LogEventWriter writer : LogEventCollector.getInstance().getLogEventWriters()) {
+				// explicitly stop logging
+				for (LogEventWriter writer : LogEventCollector.getInstance().getLogEventWriters()) {
 
-                    writer.stop();
+					writer.stop();
 
-                }
+				}
 
-                LogEventCollector.getInstance().stop();
+				LogEventCollector.getInstance().stop();
 
-            } catch (Exception ex) {
+			} catch (Exception ex) {
 
-                LOGGER.error("Exception while terminating tank", ex);
+				LOGGER.error("Exception while terminating tank", ex);
 
-            }
-        }));
-		
+			}
+		}));
+
 		LOGGER.info(MARKER, "Tank ready");
-		
+
 	}
-	
+
+	private static void updateXpubAndTpubKeysForUserAndProvider(UserChannel userChannel, UniquidNodeImpl uniquidNode, TankSettings appSettings, RegisterFactory registerFactory) {
+		String userXpub = uniquidNode.getPublicKey();
+		String userTpub = uniquidNode.getChannelKey(userChannel).getPublicKey();
+
+		FunctionRequestMessage request = new FunctionRequestMessage();
+		request.setFunction(32);
+		request.setUser(userChannel.getUserAddress());
+
+		final ObjectMapper objectMapper = new ObjectMapper();
+		try {
+			request.setParameters(objectMapper.writeValueAsString(new PubKeysDto(userXpub, userTpub)));
+			final MQTTUserClient userClient = new MQTTUserClient(
+					appSettings.getMQTTBroker(),
+					userChannel.getProviderName(),
+					TIMEOUT_IN_SECONDS,
+					userChannel.getUserAddress());
+
+			FunctionResponseMessage response = (FunctionResponseMessage) userClient.execute(request);
+			PubKeysDto keysDto = objectMapper.readValue(response.getResult(), PubKeysDto.class);
+			String providerXpub = keysDto.getXpub();
+			String providerTpub = keysDto.getTpub();
+			userChannel.setProviderXpub(providerXpub);
+			userChannel.setProviderTpub(providerTpub);
+			registerFactory.getUserRegister().updateChannel(userChannel);
+		} catch (UserClientException e) {
+			LOGGER.error(MARKER, e.getMessage(), e);
+		} catch (RegisterException e) {
+			LOGGER.error(MARKER, e.getMessage(), e);
+		} catch (IOException e) {
+			LOGGER.error(MARKER, e.getMessage(), e);
+		}
+	}
+
+
 }
