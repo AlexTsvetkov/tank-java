@@ -149,8 +149,6 @@ public class Main {
 		//
 		RegisterFactory registerFactory = new SQLiteRegisterFactory(appSettings.getDBUrl());
 
-		List<ProviderChannel> allChannels = registerFactory.getProviderRegister().getAllChannels();
-
 		//
 		// 2 start to construct an UniquidNode...
 		//
